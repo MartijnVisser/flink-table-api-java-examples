@@ -1,0 +1,82 @@
+# EXPERIMENT (fork-only, ci-test branch): manage Flink statements with the Confluent Cloud CLI
+# instead of the plugin's built-in lifecycle actions (see manage.yml). Not a template and not for
+# upstream.
+#
+# Auth differs from manage.yml. The Confluent CLI's `confluent login` authenticates with a user
+# email/password (CONFLUENT_CLOUD_EMAIL / CONFLUENT_CLOUD_PASSWORD); it cannot log in with a
+# service-account API key, and the account must not use SSO. This is a downside versus the plugin
+# approach, which authenticates with the Flink API key/secret directly. It therefore needs two new
+# secrets (CONFLUENT_CLOUD_EMAIL, CONFLUENT_CLOUD_PASSWORD) that manage.yml does not.
+#
+# Unlike manage.yml there is no build step: the CLI operates on statements directly, so no JAR is
+# produced. Statements are addressed by their Confluent Cloud name (as shown by `list`), which for
+# a plugin-deployed statement is the application-prefixed name, not the plugin's application/
+# statement-name pair.
+name: Manage Flink Statements (CLI)
+
+run-name: "CLI ${{ inputs.action }}${{ inputs['statement-name'] != '' && format(' / {0}', inputs['statement-name']) || '' }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        type: choice
+        options:
+          - list
+          - describe
+          - stop
+          - resume
+          - delete
+      statement-name:
+        description: 'Confluent Cloud statement name as shown by `list` (required for describe/stop/resume/delete; leave empty for list)'
+        required: false
+
+env:
+  CONFLUENT_CLOUD_EMAIL: ${{ secrets.CONFLUENT_CLOUD_EMAIL }}
+  CONFLUENT_CLOUD_PASSWORD: ${{ secrets.CONFLUENT_CLOUD_PASSWORD }}
+  CLOUD_PROVIDER: ${{ secrets.CLOUD_PROVIDER }}
+  CLOUD_REGION: ${{ secrets.CLOUD_REGION }}
+  ORG_ID: ${{ secrets.ORG_ID }}
+  ENV_ID: ${{ secrets.ENV_ID }}
+  COMPUTE_POOL_ID: ${{ secrets.COMPUTE_POOL_ID }}
+
+jobs:
+  manage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Confluent CLI
+        run: |
+          curl -sL --http1.1 https://cnfl.io/cli | sh -s -- -b "$HOME/.local/bin" latest
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Log in to Confluent Cloud
+        # Non-interactive login reads CONFLUENT_CLOUD_EMAIL / CONFLUENT_CLOUD_PASSWORD from the env.
+        # If the account belongs to multiple organizations, add:
+        #   confluent organization use "$ORG_ID"
+        run: confluent login
+
+      - name: Run lifecycle action
+        # Inputs are passed via env, not interpolated into the script, so free-text input cannot
+        # inject shell commands. The command is built as an array so each argument stays one word.
+        env:
+          ACTION: ${{ inputs.action }}
+          STATEMENT_NAME: ${{ inputs['statement-name'] }}
+        run: |
+          args=(flink statement "$ACTION")
+          if [ "$ACTION" != "list" ]; then
+            if [ -z "$STATEMENT_NAME" ]; then
+              echo "::error::action '$ACTION' requires statement-name"
+              exit 1
+            fi
+            args+=("$STATEMENT_NAME")
+          fi
+          args+=(--cloud "$CLOUD_PROVIDER" --region "$CLOUD_REGION" --environment "$ENV_ID" --output json)
+          # list can be scoped to the compute pool; delete must not prompt in CI.
+          if [ "$ACTION" = "list" ]; then
+            args+=(--compute-pool "$COMPUTE_POOL_ID")
+          elif [ "$ACTION" = "delete" ]; then
+            args+=(--force)
+          fi
+          confluent "${args[@]}"
