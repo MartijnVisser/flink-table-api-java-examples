@@ -66,11 +66,6 @@ class Example_08_IntegrationAndDeploymentIT {
         env.useCatalog(System.getenv("TARGET_CATALOG"));
         env.useDatabase(System.getenv("TARGET_DATABASE"));
 
-        // Drop any table left over from a previous run so each run starts from a clean, empty
-        // topic. Combined with the @AfterAll cleanup this keeps runs deterministic and avoids
-        // leaking topics into the environment.
-        env.executeSql(String.format("DROP TABLE IF EXISTS `%s`", SOURCE_TABLE));
-
         System.out.println("Creating table... " + SOURCE_TABLE);
         // Create a mock table that has exactly the same schema as the example `products` table.
         // The LIKE clause is very convenient for this task which is why we use SQL here.
